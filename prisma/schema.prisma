@@ -1,0 +1,237 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ElectionStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum CandidateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String
+  code      String?  @unique
+  createdAt DateTime @default(now())
+
+  users     User[]
+  elections Election[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  matricNo     String   @unique
+  schoolEmail  String?  @unique
+  fullName     String?
+  departmentId String?
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdById  String?
+  createdAt    DateTime @default(now())
+
+  department   Department? @relation(fields: [departmentId], references: [id])
+  createdBy    User?       @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers User[]      @relation("UserCreatedBy")
+
+  roles       UserRole[]
+  receipts    VoteReceipt[] @relation("VoteVoter")
+  candidacies Candidate[]   @relation("CandidateUser")
+
+  auditLogs AuditLog[]  @relation("AuditActor")
+  approvals Candidate[] @relation("CandidateApprovedBy")
+
+  adminScopes AdminScope[]
+
+  // ✅ ADDED: opposite side of Election.createdBy
+  createdElections Election[] @relation("ElectionCreatedBy")
+}
+
+model Role {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  description  String?
+  isSystemRole Boolean  @default(false)
+  isAdminRole  Boolean  @default(false)
+  canVote      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  users     UserRole[]
+  allowedIn ElectionAllowedRole[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model ElectionType {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  elections Election[]
+}
+
+model Election {
+  id               String         @id @default(uuid())
+  title            String
+  typeId           String
+  departmentId     String?
+  startAt          DateTime?
+  endAt            DateTime?
+  status           ElectionStatus @default(DRAFT)
+  isPublished      Boolean        @default(false)
+  registrationOpen Boolean        @default(false)
+  createdById      String
+  createdAt        DateTime       @default(now())
+
+  type       ElectionType @relation(fields: [typeId], references: [id])
+  department Department?  @relation(fields: [departmentId], references: [id])
+
+  // ✅ UPDATED: add relation name so it can match User.createdElections
+  createdBy User @relation("ElectionCreatedBy", fields: [createdById], references: [id])
+
+  positions    Position[]
+  allowedRoles ElectionAllowedRole[]
+  receipts     VoteReceipt[]
+  tallies      VoteTally[]
+
+  @@index([status, isPublished])
+  @@index([departmentId])
+}
+
+model ElectionAllowedRole {
+  electionId String
+  roleId     String
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([electionId, roleId])
+  @@index([roleId])
+}
+
+model Position {
+  id         String   @id @default(uuid())
+  electionId String
+  name       String
+  maxWinners Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  election   Election    @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  candidates Candidate[]
+  receipts   VoteReceipt[]
+  tallies    VoteTally[]
+
+  @@index([electionId])
+}
+
+model Candidate {
+  id           String          @id @default(uuid())
+  positionId   String
+  userId       String
+  manifesto    String?
+  photoUrl     String?
+  status       CandidateStatus @default(PENDING)
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime        @default(now())
+
+  position   Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  user       User     @relation("CandidateUser", fields: [userId], references: [id], onDelete: Cascade)
+  approvedBy User?    @relation("CandidateApprovedBy", fields: [approvedById], references: [id])
+
+  tallies VoteTally[]
+
+  @@unique([positionId, userId])
+  @@index([status])
+}
+
+model VoteReceipt {
+  id         String   @id @default(uuid())
+  receiptId  String   @unique @default(uuid())
+  electionId String
+  positionId String
+  voterId    String
+  createdAt  DateTime @default(now())
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  voter    User     @relation("VoteVoter", fields: [voterId], references: [id], onDelete: Cascade)
+
+  @@unique([positionId, voterId])
+  @@index([electionId])
+}
+
+model VoteTally {
+  id          String   @id @default(uuid())
+  electionId  String
+  positionId  String
+  candidateId String
+  voteHash    String
+  createdAt   DateTime @default(now())
+
+  election  Election  @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+
+  @@index([electionId])
+  @@index([candidateId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  action     String
+  entityType String
+  entityId     String
+  details      Json?
+  hash         String
+  previousHash String
+  createdAt    DateTime @default(now())
+
+  actor User @relation("AuditActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@index([action])
+}
+
+model AdminScope {
+  id          String   @id @default(uuid())
+  adminUserId String
+  scopeType   String
+  scopeId     String
+  createdAt   DateTime @default(now())
+
+  admin User @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@index([scopeType, scopeId])
+}
+
+model PendingTally {
+  id          String   @id @default(uuid())
+  electionId  String
+  positionId  String
+  candidateId String
+  voteHash    String
+  createdAt   DateTime @default(now())
+}
