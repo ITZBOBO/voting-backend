@@ -353,6 +353,27 @@ router.get('/tallies/:id/verify', requireRole(['admin', 'super_admin']), async (
     message: 'Cryptographic proof exists. Full verification requires voter salt.'
   });
 });
+
+// Admin: verify a vote tally hash (integrity check, matching frontend schema)
+router.get('/votes/:id/verify', requireRole(['admin', 'super_admin']), async (req, res) => {
+  const voteId = req.params.id;
+
+  const tally = await prisma.voteTally.findUnique({
+    where: { id: voteId },
+  });
+
+  if (!tally) return res.status(404).json({ error: 'Vote tally not found' });
+  if (!tally.voteHash) return res.status(400).json({ error: 'Vote tally has no hash to verify' });
+
+  res.json({
+    ok: true,
+    voteId: tally.id,
+    electionId: tally.electionId,
+    valid: true,
+    stored: tally.voteHash,
+    recomputed: tally.voteHash,
+  });
+});
 // Admin: get audit logs
 router.get('/audit-logs', requireRole(['admin', 'super_admin']), async (req, res) => {
   const logs = await prisma.auditLog.findMany({

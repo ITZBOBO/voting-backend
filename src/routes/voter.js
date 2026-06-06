@@ -17,7 +17,29 @@ const voteLimiter = rateLimit({
   message: { error: 'Too many vote requests, please slow down.' }
 });
 
-router.get('/me', requireAuth, (req, res) => res.json({ user: req.user }));
+router.get('/me', requireAuth, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      include: { roles: { include: { role: true } }, department: true },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    res.json({
+      user: {
+        id: user.id,
+        matricNo: user.matricNo,
+        fullName: user.fullName,
+        schoolEmail: user.schoolEmail,
+        departmentId: user.departmentId,
+        department: user.department?.name || null,
+        roles: user.roles.map((ur) => ur.role.name),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch current user' });
+  }
+});
 
 router.get('/elections', requireAuth, async (req, res) => {
   const now = new Date();
@@ -237,7 +259,19 @@ router.get('/elections/:id/results', requireAuth, async (req, res) => {
 
   const positions = await prisma.position.findMany({
     where: { electionId },
-    include: { candidates: { include: { user: { select: { fullName: true, matricNo: true } } } } },
+    include: {
+      candidates: {
+        include: {
+          user: {
+            select: {
+              fullName: true,
+              matricNo: true,
+              department: { select: { name: true } }
+            }
+          }
+        }
+      }
+    },
   });
   const tallies = await prisma.voteTally.findMany({ where: { electionId } });
 
@@ -247,11 +281,89 @@ router.get('/elections/:id/results', requireAuth, async (req, res) => {
     results: p.candidates.map((c) => ({
       candidateId: c.id,
       name: c.user.fullName ?? c.user.matricNo,
+      matricNo: c.user.matricNo,
+      photoUrl: c.photoUrl,
+      department: c.user.department?.name || null,
       count: tallies.filter((v) => v.positionId === p.id && v.candidateId === c.id).length,
     })).sort((a, b) => b.count - a.count),
   }));
 
-  res.json({ electionId, electionTitle: election.title, tally });
+  // Calculate statistics
+  const roleIds = election.allowedRoles.map((r) => r.roleId);
+  const whereEligible = {
+    isActive: true,
+  };
+  if (roleIds.length > 0) {
+    whereEligible.roles = {
+      some: {
+        roleId: { in: roleIds }
+      }
+    };
+  }
+  if (election.departmentId) {
+    whereEligible.departmentId = election.departmentId;
+  }
+  const totalEligibleVoters = await prisma.user.count({ where: whereEligible });
+
+  const totalVotesCast = await prisma.voteReceipt.groupBy({
+    by: ['voterId'],
+    where: { electionId }
+  }).then((rows) => rows.length);
+
+  res.json({
+    electionId,
+    electionTitle: election.title,
+    status: election.status,
+    endAt: election.endAt,
+    totalEligibleVoters,
+    totalVotesCast,
+    tally
+  });
+});
+
+// Voter: get their own voting history/receipts
+router.get('/votes/my-history', requireAuth, async (req, res) => {
+  const receipts = await prisma.voteReceipt.findMany({
+    where: { voterId: req.user.id },
+    include: {
+      election: {
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          endAt: true,
+        }
+      },
+      position: {
+        select: {
+          id: true,
+          name: true,
+        }
+      }
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  res.json({ receipts });
+});
+
+// Voter: get their own audit log activity history
+router.get('/activity', requireAuth, async (req, res) => {
+  try {
+    const logs = await prisma.auditLog.findMany({
+      where: { actorId: req.user.id },
+      select: {
+        id: true,
+        action: true,
+        details: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ logs });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch activity logs' });
+  }
 });
 
 export default router;

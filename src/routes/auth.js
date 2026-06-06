@@ -27,7 +27,7 @@ router.post('/login', loginLimiter, validate(z.object({
 
   const user = await prisma.user.findFirst({
     where: { OR: [{ matricNo: identifier }, { schoolEmail: identifier }] },
-    include: { roles: { include: { role: true } } },
+    include: { roles: { include: { role: true } }, department: true },
   });
 
   if (!user || !user.isActive) return res.status(401).json({ error: 'Invalid credentials' });
@@ -53,6 +53,7 @@ router.post('/login', loginLimiter, validate(z.object({
       matricNo: user.matricNo,
       fullName: user.fullName,
       departmentId: user.departmentId,
+      department: user.department?.name || null,
       roles: roles.map((r) => r.name),
     },
   });
@@ -94,6 +95,30 @@ router.post('/logout', requireAuth, async (req, res) => {
   await blacklistToken(req.token);
   await audit({ actorId: req.user.id, action: 'LOGOUT', entityType: 'user', entityId: req.user.id });
   res.json({ message: 'Logged out successfully' });
+});
+
+router.post('/change-password', requireAuth, validate(z.object({
+  body: z.object({
+    currentPassword: z.string(),
+    newPassword: z.string().min(6),
+  }).strict(),
+})), async (req, res) => {
+  const { currentPassword, newPassword } = req.validated;
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!ok) return res.status(400).json({ error: 'Incorrect current password' });
+
+  const newHash = await bcrypt.hash(newPassword, 12);
+  await prisma.user.update({
+    where: { id: req.user.id },
+    data: { passwordHash: newHash },
+  });
+
+  await audit({ actorId: req.user.id, action: 'CHANGE_PASSWORD', entityType: 'user', entityId: req.user.id });
+
+  res.json({ message: 'Password changed successfully' });
 });
 
 export default router;
