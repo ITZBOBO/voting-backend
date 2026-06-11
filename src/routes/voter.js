@@ -81,13 +81,17 @@ router.get('/elections', requireAuth, async (req, res) => {
 router.get('/elections/closed', requireAuth, async (req, res) => {
   const roleIds = req.user.roles.map((r) => r.id);
 
+  const now = new Date();
+
   const elections = await prisma.election.findMany({
     where: {
-      status: { in: ['CLOSED', 'ARCHIVED'] },
-      allowedRoles: { some: { roleId: { in: roleIds } } },
       OR: [
-        { departmentId: null },
-        { departmentId: req.user.departmentId ?? '__NO_MATCH__' },
+        { status: { in: ['CLOSED', 'ARCHIVED'] } },
+        { status: 'OPEN', endAt: { lt: now } }
+      ],
+      AND: [
+        { OR: [{ allowedRoles: { none: {} } }, { allowedRoles: { some: { roleId: { in: roleIds } } } }] },
+        { OR: [{ departmentId: null }, { departmentId: req.user.departmentId ?? '__NO_MATCH__' }] },
       ],
     },
     include: {

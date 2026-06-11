@@ -35,8 +35,11 @@ model User {
   matricNo     String   @unique
   schoolEmail  String?  @unique
   fullName     String?
+  level        String?
+  faculty      String?
+  semester     String?
   departmentId String?
-  passwordHash String
+  passwordHash String?
   isActive     Boolean  @default(true)
   createdById  String?
   createdAt    DateTime @default(now())

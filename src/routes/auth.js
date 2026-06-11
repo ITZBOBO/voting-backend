@@ -8,6 +8,7 @@ import { validate } from '../middleware/validate.js';
 import { audit } from '../utils/audit.js';
 import { requireAuth } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
+import { verifySchoolStudent } from '../utils/schoolApi.js';
 
 const router = express.Router();
 
@@ -25,15 +26,74 @@ router.post('/login', loginLimiter, validate(z.object({
 })), async (req, res) => {
   const { identifier, password } = req.validated;
 
-  const user = await prisma.user.findFirst({
+  let user = await prisma.user.findFirst({
     where: { OR: [{ matricNo: identifier }, { schoolEmail: identifier }] },
     include: { roles: { include: { role: true } }, department: true },
   });
 
-  if (!user || !user.isActive) return res.status(401).json({ error: 'Invalid credentials' });
+  const isLocalAdmin = user && user.roles.some((ur) => ur.role.isAdminRole);
 
-  const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (isLocalAdmin) {
+    if (!user.isActive) return res.status(401).json({ error: 'Account disabled' });
+    const ok = user.passwordHash ? await bcrypt.compare(password, user.passwordHash) : false;
+    if (!ok) return res.status(401).json({ error: 'Invalid admin credentials' });
+  } else {
+    // Student Login via School API
+    const schoolStudent = await verifySchoolStudent(identifier, password);
+    if (!schoolStudent) {
+      return res.status(401).json({ error: 'Invalid school portal credentials' });
+    }
+
+    // Sync Department
+    let department = await prisma.department.findFirst({
+      where: { name: schoolStudent.department }
+    });
+    if (!department) {
+      department = await prisma.department.create({
+        data: { name: schoolStudent.department }
+      });
+    }
+
+    // Sync User
+    if (user) {
+      // Update existing student with latest API details
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          fullName: schoolStudent.fullName,
+          level: schoolStudent.level,
+          faculty: schoolStudent.faculty,
+          semester: schoolStudent.semester,
+          departmentId: department.id,
+          isActive: true
+        },
+        include: { roles: { include: { role: true } }, department: true }
+      });
+    } else {
+      // Create new student
+      user = await prisma.user.create({
+        data: {
+          matricNo: schoolStudent.matricNo,
+          fullName: schoolStudent.fullName,
+          level: schoolStudent.level,
+          faculty: schoolStudent.faculty,
+          semester: schoolStudent.semester,
+          departmentId: department.id,
+          isActive: true,
+        },
+        include: { roles: { include: { role: true } }, department: true }
+      });
+
+      // Assign 'student' role
+      const studentRole = await prisma.role.findUnique({ where: { name: 'student' } });
+      if (studentRole) {
+        await prisma.userRole.create({ data: { userId: user.id, roleId: studentRole.id } });
+        user.roles = [{ role: studentRole }];
+      } else {
+        user.roles = [];
+      }
+    }
+  }
 
   const roles = user.roles.map((ur) => ur.role);
 
@@ -52,6 +112,9 @@ router.post('/login', loginLimiter, validate(z.object({
       id: user.id,
       matricNo: user.matricNo,
       fullName: user.fullName,
+      level: user.level,
+      faculty: user.faculty,
+      semester: user.semester,
       departmentId: user.departmentId,
       department: user.department?.name || null,
       roles: roles.map((r) => r.name),
@@ -59,36 +122,8 @@ router.post('/login', loginLimiter, validate(z.object({
   });
 });
 
-router.post('/register', validate(z.object({
-  body: z.object({
-    matricNo: z.string().min(3),
-    fullName: z.string().min(2),
-    schoolEmail: z.string().email().optional(),
-    password: z.string().min(6),
-  }).strict(),
-})), async (req, res) => {
-  const { matricNo, fullName, schoolEmail, password } = req.validated;
-
-  const existing = await prisma.user.findFirst({
-    where: { OR: [{ matricNo }, ...(schoolEmail ? [{ schoolEmail }] : [])] },
-  });
-  if (existing) return res.status(409).json({ error: 'A user with this matric number or email already exists.' });
-
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  const studentRole = await prisma.role.findUnique({ where: { name: 'student' } });
-
-  const user = await prisma.user.create({
-    data: { matricNo, fullName, schoolEmail, passwordHash, isActive: true },
-  });
-
-  if (studentRole) {
-    await prisma.userRole.create({ data: { userId: user.id, roleId: studentRole.id } });
-  }
-
-  await audit({ actorId: user.id, action: 'SELF_REGISTER', entityType: 'user', entityId: user.id, details: { matricNo } });
-
-  res.status(201).json({ message: 'Registration successful. You can now log in.', matricNo });
+router.post('/register', (req, res) => {
+  res.status(400).json({ error: 'Registration is disabled. Please log in with your school portal credentials.' });
 });
 
 router.post('/logout', requireAuth, async (req, res) => {

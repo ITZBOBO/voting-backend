@@ -8,6 +8,7 @@ import { validate } from '../middleware/validate.js';
 import { audit } from '../utils/audit.js';
 import { sha256VoteProof } from '../utils/hash.js';
 import { sendElectionOpenEmail, sendElectionCloseEmail } from '../utils/mailer.js';
+import { fetchSchoolStudentDetails } from '../utils/schoolApi.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -308,6 +309,26 @@ router.patch('/candidates/:id/decision', requireRole(['admin', 'super_admin']), 
   res.json(cand);
 });
 
+// Admin: get recent anonymous votes for live feed
+router.get('/recent-votes', requireRole(['admin', 'super_admin']), async (req, res) => {
+  const tallies = await prisma.voteTally.findMany({
+    take: 20,
+    orderBy: { createdAt: 'desc' },
+    include: {
+      election: { select: { title: true } }
+    }
+  });
+
+  const formatted = tallies.map(t => ({
+    id: t.id,
+    electionTitle: t.election.title,
+    voteHash: t.voteHash,
+    createdAt: t.createdAt
+  }));
+
+  res.json(formatted);
+});
+
 // Admin: results
 router.get('/results/elections/:id', requireRole(['admin', 'super_admin']), async (req, res) => {
   const electionId = req.params.id;
@@ -482,6 +503,61 @@ router.post('/users', requireRole('super_admin'), validate(z.object({
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Internal server error while creating admin' });
+  }
+});
+
+// Admin: fetch student from school portal
+router.post('/users/fetch-portal', requireRole(['admin', 'super_admin']), validate(z.object({
+  body: z.object({ matricNo: z.string().min(3) }).strict()
+})), async (req, res) => {
+  const { matricNo } = req.validated;
+  const upperMatric = matricNo.toUpperCase();
+
+  try {
+    // 1. Check local DB first
+    let user = await prisma.user.findUnique({ where: { matricNo: upperMatric } });
+    if (user) {
+      return res.json({ message: 'Found locally', user });
+    }
+
+    // 2. Fetch from school API
+    const details = await fetchSchoolStudentDetails(upperMatric);
+    if (!details) {
+      return res.status(404).json({ error: 'Student not found in school portal' });
+    }
+
+    // 3. Create placeholder user in local DB
+    const salt = await bcrypt.genSalt(10);
+    const placeholderPassword = await bcrypt.hash(Math.random().toString(36).slice(-10), salt);
+
+    user = await prisma.$transaction(async (tx) => {
+      let dept = await tx.department.findFirst({ where: { name: details.department } });
+      if (!dept) {
+        dept = await tx.department.create({ data: { name: details.department } });
+      }
+
+      const newUser = await tx.user.create({
+        data: {
+          matricNo: details.matricNo,
+          fullName: details.fullName,
+          departmentId: dept.id,
+          passwordHash: placeholderPassword,
+          isActive: true,
+        }
+      });
+      const voterRole = await tx.role.findUnique({ where: { name: 'voter' } });
+      if (voterRole) {
+        await tx.userRole.create({ data: { userId: newUser.id, roleId: voterRole.id } });
+      }
+      return newUser;
+    });
+
+    await audit({ actorId: req.user.id, action: 'FETCH_PORTAL_USER', entityType: 'user', entityId: user.id, details: { matricNo: upperMatric } });
+
+    res.json({ message: 'Fetched from portal', user });
+  } catch (err) {
+    console.error('Fetch portal error:', err);
+    res.status(500).json({ error: 'Failed to fetch student from portal' });
   }
 });
 
