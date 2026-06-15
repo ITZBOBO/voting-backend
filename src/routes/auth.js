@@ -39,7 +39,14 @@ router.post('/login', loginLimiter, validate(z.object({
     if (!ok) return res.status(401).json({ error: 'Invalid admin credentials' });
   } else {
     // Student Login via School API
-    const schoolStudent = await verifySchoolStudent(identifier, password);
+    let schoolStudent;
+    try {
+      schoolStudent = await verifySchoolStudent(identifier, password);
+    } catch (err) {
+      console.error(err);
+      return res.status(503).json({ error: err.message });
+    }
+    
     if (!schoolStudent) {
       return res.status(401).json({ error: 'Invalid school portal credentials' });
     }

@@ -1,11 +1,9 @@
+// Bypass self-signed or leaf certificate validation
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 export async function verifySchoolStudent(identifier, password) {
   const apiURL = process.env.SCHOOL_API_URL || 'https://freshdev.run.edu.ng';
   const apiKey = process.env.SCHOOL_API_KEY || '@@@@@@@@@@';
-
-  // Bypass self-signed or leaf certificate validation in development if needed
-  if (process.env.NODE_ENV !== 'production') {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  }
 
   try {
     // 1. Call login endpoint
@@ -44,10 +42,6 @@ export async function verifySchoolStudent(identifier, password) {
 export async function fetchSchoolStudentDetails(identifier) {
   const apiURL = process.env.SCHOOL_API_URL || 'https://freshdev.run.edu.ng';
   const apiKey = process.env.SCHOOL_API_KEY || '@@@@@@@@@@';
-
-  if (process.env.NODE_ENV !== 'production') {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  }
 
   try {
     const detailsRes = await fetch(
