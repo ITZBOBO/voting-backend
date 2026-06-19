@@ -141,7 +141,15 @@ router.get('/elections/:id/positions', requireAuth, async (req, res) => {
     include: {
       candidates: {
         where: { status: 'APPROVED' },
-        include: { user: { select: { fullName: true, matricNo: true } } },
+        include: {
+          user: {
+            select: {
+              fullName: true,
+              matricNo: true,
+              department: { select: { name: true } },
+            },
+          },
+        },
       },
     },
     orderBy: { createdAt: 'asc' },
