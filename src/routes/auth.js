@@ -38,66 +38,78 @@ router.post('/login', loginLimiter, validate(z.object({
     const ok = user.passwordHash ? await bcrypt.compare(password, user.passwordHash) : false;
     if (!ok) return res.status(401).json({ error: 'Invalid admin credentials' });
   } else {
-    // Student Login via School API
-    let schoolStudent;
-    try {
-      schoolStudent = await verifySchoolStudent(identifier, password);
-    } catch (err) {
-      console.error(err);
-      return res.status(503).json({ error: err.message });
-    }
-    
-    if (!schoolStudent) {
-      return res.status(401).json({ error: 'Invalid school portal credentials' });
+    // If the student already exists locally and has a password hash, try local authentication first
+    let authenticatedLocally = false;
+    if (user && user.passwordHash) {
+      if (!user.isActive) return res.status(401).json({ error: 'Account disabled' });
+      const ok = await bcrypt.compare(password, user.passwordHash);
+      if (ok) {
+        authenticatedLocally = true;
+      }
     }
 
-    // Sync Department
-    let department = await prisma.department.findFirst({
-      where: { name: schoolStudent.department }
-    });
-    if (!department) {
-      department = await prisma.department.create({
-        data: { name: schoolStudent.department }
-      });
-    }
+    if (!authenticatedLocally) {
+      // Student Login via School API
+      let schoolStudent;
+      try {
+        schoolStudent = await verifySchoolStudent(identifier, password);
+      } catch (err) {
+        console.error(err);
+        return res.status(503).json({ error: err.message });
+      }
+      
+      if (!schoolStudent) {
+        return res.status(401).json({ error: 'Invalid school portal credentials' });
+      }
 
-    // Sync User
-    if (user) {
-      // Update existing student with latest API details
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          fullName: schoolStudent.fullName,
-          level: schoolStudent.level,
-          faculty: schoolStudent.faculty,
-          semester: schoolStudent.semester,
-          departmentId: department.id,
-          isActive: true
-        },
-        include: { roles: { include: { role: true } }, department: true }
+      // Sync Department
+      let department = await prisma.department.findFirst({
+        where: { name: schoolStudent.department }
       });
-    } else {
-      // Create new student
-      user = await prisma.user.create({
-        data: {
-          matricNo: schoolStudent.matricNo,
-          fullName: schoolStudent.fullName,
-          level: schoolStudent.level,
-          faculty: schoolStudent.faculty,
-          semester: schoolStudent.semester,
-          departmentId: department.id,
-          isActive: true,
-        },
-        include: { roles: { include: { role: true } }, department: true }
-      });
+      if (!department) {
+        department = await prisma.department.create({
+          data: { name: schoolStudent.department }
+        });
+      }
 
-      // Assign 'student' role
-      const studentRole = await prisma.role.findUnique({ where: { name: 'student' } });
-      if (studentRole) {
-        await prisma.userRole.create({ data: { userId: user.id, roleId: studentRole.id } });
-        user.roles = [{ role: studentRole }];
+      // Sync User
+      if (user) {
+        // Update existing student with latest API details
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            fullName: schoolStudent.fullName,
+            level: schoolStudent.level,
+            faculty: schoolStudent.faculty,
+            semester: schoolStudent.semester,
+            departmentId: department.id,
+            isActive: true
+          },
+          include: { roles: { include: { role: true } }, department: true }
+        });
       } else {
-        user.roles = [];
+        // Create new student
+        user = await prisma.user.create({
+          data: {
+            matricNo: schoolStudent.matricNo,
+            fullName: schoolStudent.fullName,
+            level: schoolStudent.level,
+            faculty: schoolStudent.faculty,
+            semester: schoolStudent.semester,
+            departmentId: department.id,
+            isActive: true,
+          },
+          include: { roles: { include: { role: true } }, department: true }
+        });
+
+        // Assign 'student' role
+        const studentRole = await prisma.role.findUnique({ where: { name: 'student' } });
+        if (studentRole) {
+          await prisma.userRole.create({ data: { userId: user.id, roleId: studentRole.id } });
+          user.roles = [{ role: studentRole }];
+        } else {
+          user.roles = [];
+        }
       }
     }
   }
