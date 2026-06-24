@@ -21,7 +21,19 @@ router.get('/me', requireAuth, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      include: { roles: { include: { role: true } }, department: true },
+      include: { 
+        roles: { include: { role: true } }, 
+        department: true,
+        candidacies: {
+          include: {
+            position: {
+              include: {
+                election: { select: { title: true } }
+              }
+            }
+          }
+        }
+      },
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -34,6 +46,14 @@ router.get('/me', requireAuth, async (req, res) => {
         departmentId: user.departmentId,
         department: user.department?.name || null,
         roles: user.roles.map((ur) => ur.role.name),
+        candidacies: user.candidacies.map((c) => ({
+          id: c.id,
+          manifesto: c.manifesto,
+          photoUrl: c.photoUrl,
+          status: c.status,
+          positionName: c.position.name,
+          electionTitle: c.position.election.title,
+        })),
       },
     });
   } catch (e) {
@@ -376,6 +396,36 @@ router.get('/activity', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch activity logs' });
   }
+});
+
+// Candidate: update their own profile (photo and manifesto)
+router.patch('/candidate/profile', requireAuth, validate(z.object({
+  body: z.object({
+    manifesto: z.string().optional(),
+    photoUrl: z.string().url().optional().or(z.literal('')),
+  }).strict()
+})), async (req, res) => {
+  const { manifesto, photoUrl } = req.validated;
+  
+  const candidate = await prisma.candidate.findFirst({
+    where: { userId: req.user.id }
+  });
+  
+  if (!candidate) {
+    return res.status(403).json({ error: 'You are not registered as a candidate.' });
+  }
+  
+  const updated = await prisma.candidate.update({
+    where: { id: candidate.id },
+    data: {
+      manifesto: manifesto !== undefined ? manifesto : undefined,
+      photoUrl: photoUrl !== undefined ? (photoUrl === '' ? null : photoUrl) : undefined,
+    }
+  });
+  
+  await audit({ actorId: req.user.id, action: 'UPDATE_CANDIDATE_PROFILE', entityType: 'candidate', entityId: candidate.id, details: { updatedFields: Object.keys(req.validated) } });
+  
+  res.json({ ok: true, candidate: updated });
 });
 
 export default router;

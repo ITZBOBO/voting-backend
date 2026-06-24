@@ -57,7 +57,7 @@ model User {
 
   adminScopes AdminScope[]
 
-  // ✅ ADDED: opposite side of Election.createdBy
+  //  ADDED: opposite side of Election.createdBy
   createdElections Election[] @relation("ElectionCreatedBy")
 }
 
@@ -109,7 +109,7 @@ model Election {
   type       ElectionType @relation(fields: [typeId], references: [id])
   department Department?  @relation(fields: [departmentId], references: [id])
 
-  // ✅ UPDATED: add relation name so it can match User.createdElections
+  //  UPDATED: add relation name so it can match User.createdElections
   createdBy User @relation("ElectionCreatedBy", fields: [createdById], references: [id])
 
   positions    Position[]

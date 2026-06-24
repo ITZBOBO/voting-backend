@@ -281,7 +281,14 @@ router.get('/candidates', requireRole(['admin', 'super_admin']), async (req, res
   const candidates = await prisma.candidate.findMany({
     where,
     include: {
-      user: { select: { id: true, fullName: true, matricNo: true } },
+      user: {
+        select: {
+          id: true,
+          fullName: true,
+          matricNo: true,
+          department: { select: { id: true, name: true, code: true } }
+        }
+      },
       position: { select: { id: true, name: true, electionId: true } },
     },
     orderBy: { createdAt: 'desc' },
@@ -349,7 +356,15 @@ router.get('/results/elections/:id', requireRole(['admin', 'super_admin']), asyn
   const electionId = req.params.id;
   const positions = await prisma.position.findMany({
     where: { electionId },
-    include: { candidates: { include: { user: true } } },
+    include: {
+      candidates: {
+        include: {
+          user: {
+            include: { department: true }
+          }
+        }
+      }
+    },
   });
   const tallies = await prisma.voteTally.findMany({ where: { electionId } });
 
@@ -359,6 +374,10 @@ router.get('/results/elections/:id', requireRole(['admin', 'super_admin']), asyn
     results: p.candidates.map((c) => ({
       candidateId: c.id,
       name: c.user.fullName ?? c.user.matricNo,
+      matricNo: c.user.matricNo,
+      photoUrl: c.photoUrl,
+      department: c.user.department?.name || null,
+      departmentCode: c.user.department?.code || null,
       count: tallies.filter((v) => v.positionId === p.id && v.candidateId === c.id).length,
     })).sort((a, b) => b.count - a.count),
   }));

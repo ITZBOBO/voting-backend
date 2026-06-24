@@ -73,6 +73,14 @@ router.post('/login', loginLimiter, validate(z.object({
       }
 
       // Sync User
+      // If the user lookup was by email, double check by matricNo before creating a new user
+      if (!user) {
+        user = await prisma.user.findUnique({
+          where: { matricNo: schoolStudent.matricNo },
+          include: { roles: { include: { role: true } }, department: true },
+        });
+      }
+
       if (user) {
         // Update existing student with latest API details
         user = await prisma.user.update({
@@ -125,6 +133,17 @@ router.post('/login', loginLimiter, validate(z.object({
 
   await audit({ actorId: user.id, action: 'LOGIN', entityType: 'user', entityId: user.id });
 
+  const candidacies = await prisma.candidate.findMany({
+    where: { userId: user.id },
+    include: {
+      position: {
+        include: {
+          election: { select: { title: true } }
+        }
+      }
+    }
+  });
+
   res.json({
     token,
     user: {
@@ -137,6 +156,14 @@ router.post('/login', loginLimiter, validate(z.object({
       departmentId: user.departmentId,
       department: user.department?.name || null,
       roles: roles.map((r) => r.name),
+      candidacies: candidacies.map((c) => ({
+        id: c.id,
+        manifesto: c.manifesto,
+        photoUrl: c.photoUrl,
+        status: c.status,
+        positionName: c.position.name,
+        electionTitle: c.position.election.title,
+      })),
     },
   });
 });
