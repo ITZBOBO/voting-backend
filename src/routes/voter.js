@@ -1,6 +1,13 @@
 import crypto from 'crypto';
 import express from 'express';
 import { z } from 'zod';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsDir = path.join(__dirname, '../../uploads');
 
 import { prisma } from '../utils/prisma.js';
 import { requireAuth, forbidVotingForAdmins } from '../middleware/auth.js';
@@ -182,6 +189,14 @@ router.post('/votes', requireAuth, forbidVotingForAdmins, voteLimiter, validate(
   body: z.object({ positionId: z.string().uuid(), candidateId: z.string().uuid() }).strict(),
 })), async (req, res) => {
   const { positionId, candidateId } = req.validated;
+
+  // Candidates/aspirants are forbidden from voting
+  const isCandidate = await prisma.candidate.findFirst({
+    where: { userId: req.user.id }
+  });
+  if (isCandidate) {
+    return res.status(403).json({ error: 'Candidates/aspirants cannot vote' });
+  }
 
   const [position, candidate] = await Promise.all([
     prisma.position.findUnique({
@@ -403,9 +418,10 @@ router.patch('/candidate/profile', requireAuth, validate(z.object({
   body: z.object({
     manifesto: z.string().optional(),
     photoUrl: z.string().url().optional().or(z.literal('')),
+    photoBase64: z.string().optional(),
   }).strict()
 })), async (req, res) => {
-  const { manifesto, photoUrl } = req.validated;
+  const { manifesto, photoUrl, photoBase64 } = req.validated;
   
   const candidate = await prisma.candidate.findFirst({
     where: { userId: req.user.id }
@@ -415,11 +431,36 @@ router.patch('/candidate/profile', requireAuth, validate(z.object({
     return res.status(403).json({ error: 'You are not registered as a candidate.' });
   }
   
+  let finalPhotoUrl = photoUrl;
+
+  if (photoBase64) {
+    const match = photoBase64.match(/^data:image\/([a-zA-Z+]+);base64,(.+)$/);
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid photo format. Must be a valid Base64 image.' });
+    }
+    
+    const ext = match[1];
+    const data = match[2];
+    const buffer = Buffer.from(data, 'base64');
+    
+    const filename = `candidate_${candidate.id}_${Date.now()}.${ext}`;
+    const filePath = path.join(uploadsDir, filename);
+    
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(filePath, buffer);
+    
+    const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    finalPhotoUrl = `${protocol}://${req.headers.host}/uploads/${filename}`;
+  }
+  
   const updated = await prisma.candidate.update({
     where: { id: candidate.id },
     data: {
       manifesto: manifesto !== undefined ? manifesto : undefined,
-      photoUrl: photoUrl !== undefined ? (photoUrl === '' ? null : photoUrl) : undefined,
+      photoUrl: finalPhotoUrl !== undefined ? (finalPhotoUrl === '' ? null : finalPhotoUrl) : undefined,
     }
   });
   
